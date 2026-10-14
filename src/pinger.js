@@ -1,9 +1,19 @@
 /**
  * Anti-sleep self-pinger for Render.com Free Tier
  * Keeps the web service awake by sending HTTP requests every few minutes.
+ * Can be toggled on/off via ENABLE_SELF_PINGER=true/false
  */
 
-function startPinger({ port = 3000, intervalMinutes = 9 } = {}) {
+function startPinger({ port = 3000, intervalMinutes = 9, enabled } = {}) {
+  const isEnabled = enabled !== undefined 
+    ? enabled 
+    : (process.env.ENABLE_SELF_PINGER === undefined || process.env.ENABLE_SELF_PINGER === 'true');
+
+  if (!isEnabled) {
+    console.log('[Anti-Sleep Pinger] ℹ️ Self-pinger is DISABLED (ENABLE_SELF_PINGER=false). You can use external cron services like cron-job.org to save free tier hours.');
+    return null;
+  }
+
   // Render.com automatically provides RENDER_EXTERNAL_URL (e.g. https://my-app.onrender.com)
   const targetUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || `http://localhost:${port}`;
   const intervalMs = Math.max(1, intervalMinutes) * 60 * 1000;

@@ -71,12 +71,20 @@ class MyStatClient {
       body: JSON.stringify(payload)
     });
 
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      if (!res.ok) {
+        throw new Error(`Сервер MyStat временно недоступен (HTTP ${res.status}). Попробуйте позже.`);
+      }
+      throw new Error('Некорректный формат ответа от сервера MyStat.');
+    }
 
     if (!res.ok || Array.isArray(data) || !data.access_token) {
       const errorMsg = Array.isArray(data) && data[0]?.message 
         ? data[0].message 
-        : data.message || 'Неверный логин или пароль в MyStat.';
+        : data?.message || (res.status === 401 ? 'Неверный логин или пароль в MyStat.' : `Ошибка сервера MyStat (HTTP ${res.status})`);
       throw new Error(errorMsg);
     }
 
@@ -137,12 +145,18 @@ class MyStatClient {
       let errMsg = `Ошибка запроса к MyStat API: ${res.status}`;
       try {
         const errData = await res.json();
-        if (errData.message) errMsg = errData.message;
-      } catch (e) {}
+        if (errData?.message) errMsg = errData.message;
+      } catch (e) {
+        errMsg = `Сервер MyStat временно недоступен (HTTP ${res.status})`;
+      }
       throw new Error(errMsg);
     }
 
-    return await res.json();
+    try {
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
   }
 
   /**

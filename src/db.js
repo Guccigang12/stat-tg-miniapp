@@ -1,5 +1,7 @@
 /**
- * Simple file-based storage for user sessions and MyStat credentials
+ * Session and user storage
+ * Supports Single-User Mode without database persistence:
+ * Uses MYSTAT_USERNAME, MYSTAT_PASSWORD, and MY_TELEGRAM_ID from environment.
  */
 
 const fs = require('fs');
@@ -32,33 +34,73 @@ function saveData() {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(usersMap, null, 2), 'utf8');
   } catch (err) {
-    console.error('Error saving users.json:', err.message);
+    // Ephemeral disk on Render might throw or be wiped, ignore safe write errors
   }
 }
 
-// Initial load
 loadData();
 
+function isSingleUserMode() {
+  return Boolean(process.env.MYSTAT_USERNAME && process.env.MYSTAT_PASSWORD);
+}
+
+function getSingleUserTelegramId() {
+  return process.env.MY_TELEGRAM_ID ? String(process.env.MY_TELEGRAM_ID).trim() : null;
+}
+
 module.exports = {
+  isSingleUserMode,
+  getSingleUserTelegramId,
+
   getUser(telegramId) {
+    const singleMode = isSingleUserMode();
+    const myTgId = getSingleUserTelegramId();
+
+    if (singleMode) {
+      // In single user mode, match MY_TELEGRAM_ID or fallback if no ID or default
+      const key = myTgId || 'single_user';
+      const existing = usersMap[key] || {};
+
+      return {
+        username: process.env.MYSTAT_USERNAME,
+        password: process.env.MYSTAT_PASSWORD,
+        telegramId: myTgId,
+        ...existing
+      };
+    }
+
     if (!telegramId) return null;
     return usersMap[String(telegramId)] || null;
   },
 
   saveUser(telegramId, userData) {
-    if (!telegramId) return;
-    const existing = usersMap[String(telegramId)] || {};
-    usersMap[String(telegramId)] = {
+    const singleMode = isSingleUserMode();
+    const myTgId = getSingleUserTelegramId();
+    const idKey = singleMode ? (myTgId || 'single_user') : String(telegramId || 'default');
+
+    const existing = usersMap[idKey] || {};
+    usersMap[idKey] = {
       ...existing,
       ...userData,
-      telegramId: String(telegramId),
+      telegramId: idKey,
       updatedAt: new Date().toISOString()
     };
+
     saveData();
-    return usersMap[String(telegramId)];
+    return usersMap[idKey];
   },
 
   deleteUser(telegramId) {
+    if (isSingleUserMode()) {
+      // In single-user mode, clear tokens from memory but credentials remain in .env
+      const myTgId = getSingleUserTelegramId() || 'single_user';
+      if (usersMap[myTgId]) {
+        delete usersMap[myTgId].accessToken;
+        delete usersMap[myTgId].tokenExpiresAt;
+      }
+      return true;
+    }
+
     if (!telegramId) return false;
     delete usersMap[String(telegramId)];
     saveData();

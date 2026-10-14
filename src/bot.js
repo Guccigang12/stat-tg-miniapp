@@ -1,19 +1,36 @@
 /**
  * Telegram Bot implementation using Grammy
  * Provides Telegram Mini App launcher and direct chat commands.
+ * Supports Single-User Mode and access protection via MY_TELEGRAM_ID.
  */
 
 const { Bot, InlineKeyboard, Keyboard } = require('grammy');
 const { MyStatClient, HomeworkStatus } = require('./mystat');
 const db = require('./db');
 
-function createBot(token, webAppUrl) {
+function createBot(token, webAppUrl, defaultClient = null) {
   if (!token) {
     console.warn('[Telegram Bot] ⚠️ BOT_TOKEN is not provided. Telegram bot will not start. (Mini App web service will still work)');
     return null;
   }
 
   const bot = new Bot(token);
+
+  // Security Guard: restrict bot access only to MY_TELEGRAM_ID if configured
+  const myTelegramId = process.env.MY_TELEGRAM_ID ? String(process.env.MY_TELEGRAM_ID).trim() : null;
+
+  if (myTelegramId) {
+    console.log(`[Telegram Bot] 🔒 Private bot guard enabled for Telegram ID: ${myTelegramId}`);
+    bot.use(async (ctx, next) => {
+      const senderId = ctx.from ? String(ctx.from.id) : null;
+      if (senderId !== myTelegramId) {
+        console.warn(`[Telegram Bot] ⛔ Unauthorized access attempt from user ID: ${senderId} (@${ctx.from?.username || 'unknown'})`);
+        await ctx.reply('⛔ Доступ ограничен. Это приватный бот.');
+        return;
+      }
+      await next();
+    });
+  }
 
   // Main reply keyboard for quick actions
   const mainKeyboard = new Keyboard()
@@ -24,6 +41,14 @@ function createBot(token, webAppUrl) {
 
   // Helper to get client for user
   async function getClientForUser(ctx) {
+    // If default single-user client is provided from server, use it directly!
+    if (defaultClient && defaultClient.username) {
+      if (defaultClient.isTokenExpired() || !defaultClient.accessToken) {
+        await defaultClient.login(process.env.MYSTAT_USERNAME, process.env.MYSTAT_PASSWORD);
+      }
+      return { client: defaultClient, user: { username: process.env.MYSTAT_USERNAME } };
+    }
+
     const userId = ctx.from.id;
     const user = db.getUser(userId);
 
@@ -85,7 +110,7 @@ function createBot(token, webAppUrl) {
       '• <code>/schedule</code> — Расписание на сегодня и завтра\n' +
       '• <code>/grades</code> — Оценки за сегодня\n' +
       '• <code>/leaders</code> — Таблица лидеров группы\n' +
-      '• <code>/logout</code> — Выйти из аккаунта MyStat\n\n' +
+      '• <code>/logout</code> — Сбросить сессию MyStat\n\n' +
       '💡 В <b>Mini App</b> доступен полный календарь на месяц, фильтры и удобный интерфейс!',
       {
         parse_mode: 'HTML',
@@ -338,7 +363,7 @@ function createBot(token, webAppUrl) {
     await ctx.reply(
       '💡 <b>Как пользоваться:</b>\n\n' +
       '1. Нажми <b>🚀 Открыть Mini App</b>\n' +
-      '2. Введи свои логин и пароль от mystat.itstep.org один раз\n' +
+      '2. Твой аккаунт синхронизируется автоматически без необходимости вводить логин и пароль!\n' +
       '3. Пользуйся удобным интерфейсом для просмотра домашки, скачивания файлов, расписания и оценок!',
       {
         parse_mode: 'HTML',
@@ -350,9 +375,7 @@ function createBot(token, webAppUrl) {
   // Logout command
   bot.command('logout', async (ctx) => {
     db.deleteUser(ctx.from.id);
-    await ctx.reply('👋 Вы вышли из учётной записи MyStat. Чтобы войти снова, откройте Mini App.', {
-      reply_markup: new InlineKeyboard().webApp('🔐 Войти', webAppUrl)
-    });
+    await ctx.reply('Сессия обновлена. В режиме Single-User учетные данные считываются из переменных окружения.');
   });
 
   return bot;

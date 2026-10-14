@@ -133,6 +133,7 @@ async function checkAuthSession() {
     if (data.authenticated && data.userInfo) {
       state.token = data.token;
       state.userInfo = data.userInfo;
+      state.singleUserMode = Boolean(data.singleUserMode);
       localStorage.setItem('mystat_token', state.token);
       onAuthSuccess();
       return;
@@ -207,6 +208,10 @@ function renderStudentProfile() {
 
   elements.profileFullName.textContent = u.full_name || 'Студент';
   elements.profileGroupName.textContent = u.group_name || 'Группа IT Step';
+
+  if (state.singleUserMode && elements.btnLogout) {
+    elements.btnLogout.innerHTML = '<i data-lucide="rotate-cw"></i> <span>Обновить данные MyStat</span>';
+  }
   elements.profileLevel.textContent = u.level || 1;
 }
 
@@ -805,8 +810,15 @@ function setupEventListeners() {
     }
   });
 
-  // Logout Button
+  // Logout / Refresh Button
   elements.btnLogout.addEventListener('click', async () => {
+    if (state.singleUserMode) {
+      showToast('🔄 Синхронизирую данные с MyStat...');
+      await loadAllData();
+      showToast('✅ Данные успешно обновлены!');
+      return;
+    }
+
     if (!confirm('Вы действительно хотите выйти из MyStat?')) return;
     
     await fetch('/api/logout', {

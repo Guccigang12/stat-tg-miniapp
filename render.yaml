@@ -11,5 +11,13 @@ services:
         value: production
       - key: BOT_TOKEN
         sync: false
+      - key: MYSTAT_USERNAME
+        sync: false
+      - key: MYSTAT_PASSWORD
+        sync: false
+      - key: MY_TELEGRAM_ID
+        sync: false
+      - key: ENABLE_SELF_PINGER
+        value: "true"
       - key: PING_INTERVAL_MINUTES
         value: "9"

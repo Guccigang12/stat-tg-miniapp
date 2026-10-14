@@ -1,6 +1,7 @@
 /**
  * Main Express Web Server and Telegram Bot Service
  * Designed to run on Render.com free tier or locally.
+ * Supports Single-User Mode (auto-auth without database or manual login).
  */
 
 require('dotenv').config();
@@ -15,6 +16,37 @@ const { startPinger } = require('./pinger');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
+
+// Single User Mode Configuration
+const isSingleUser = Boolean(process.env.MYSTAT_USERNAME && process.env.MYSTAT_PASSWORD);
+let singleUserClient = null;
+
+if (isSingleUser) {
+  singleUserClient = new MyStatClient({
+    username: process.env.MYSTAT_USERNAME,
+    password: process.env.MYSTAT_PASSWORD
+  });
+}
+
+// Ensure single user is authenticated with MyStat API
+async function ensureSingleUserAuth() {
+  if (!singleUserClient) return null;
+  if (!singleUserClient.accessToken || singleUserClient.isTokenExpired() || !singleUserClient.userInfo) {
+    console.log(`[Single-User Mode] 🔐 Authenticating in MyStat as "${process.env.MYSTAT_USERNAME}"...`);
+    const result = await singleUserClient.login(process.env.MYSTAT_USERNAME, process.env.MYSTAT_PASSWORD);
+    console.log(`[Single-User Mode] ✅ Authenticated! Student: "${result.userInfo?.full_name}", Group ID: ${singleUserClient.groupId}`);
+    
+    db.saveUser(process.env.MY_TELEGRAM_ID || 'single_user', {
+      username: process.env.MYSTAT_USERNAME,
+      password: process.env.MYSTAT_PASSWORD,
+      accessToken: result.accessToken,
+      tokenExpiresAt: result.tokenExpiresAt,
+      groupId: singleUserClient.groupId,
+      userInfo: result.userInfo
+    });
+  }
+  return singleUserClient;
+}
 
 // Base public URL for Render.com or local
 const APP_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || `http://localhost:${PORT}`;
@@ -33,7 +65,8 @@ app.get('/ping', (req, res) => {
     status: 'ok',
     uptime: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
-    service: 'MyStat Telegram Assistant'
+    service: 'MyStat Telegram Assistant',
+    singleUserMode: isSingleUser
   });
 });
 
@@ -43,13 +76,18 @@ app.get('/health', (req, res) => {
 
 /**
  * Middleware: extract or resolve MyStatClient from request
- * Accepts:
- *  - Header `Authorization: Bearer <token>`
- *  - Or Header `X-Telegram-Id: <id>` (looks up in db)
- *  - Or Query param `token` / `telegramId`
  */
 async function resolveClient(req, res, next) {
   try {
+    // If Single-User Mode is configured via environment variables, use it automatically!
+    if (isSingleUser) {
+      await ensureSingleUserAuth();
+      req.mystat = singleUserClient;
+      req.currentUser = db.getUser(process.env.MY_TELEGRAM_ID || 'single_user');
+      req.telegramId = process.env.MY_TELEGRAM_ID || 'single_user';
+      return next();
+    }
+
     const authHeader = req.headers['authorization'];
     const telegramId = req.headers['x-telegram-id'] || req.query.telegramId;
     let token = null;
@@ -119,7 +157,7 @@ app.post('/api/login', async (req, res) => {
     if (telegramId) {
       db.saveUser(telegramId, {
         username,
-        password, // stored to auto-refresh access token when it expires
+        password,
         accessToken: loginResult.accessToken,
         tokenExpiresAt: loginResult.tokenExpiresAt,
         groupId: loginResult.userInfo?.current_group_id,
@@ -144,9 +182,25 @@ app.post('/api/login', async (req, res) => {
 
 /**
  * GET /api/session
- * Check if telegramId already has an active session
+ * Check if session is already active.
+ * In Single-User Mode, immediately returns authenticated: true!
  */
 app.get('/api/session', async (req, res) => {
+  if (isSingleUser) {
+    try {
+      await ensureSingleUserAuth();
+      return res.json({
+        authenticated: true,
+        token: singleUserClient.accessToken,
+        userInfo: singleUserClient.userInfo,
+        singleUserMode: true
+      });
+    } catch (err) {
+      console.error('[Session Error]', err.message);
+      return res.json({ authenticated: false, error: err.message });
+    }
+  }
+
   const telegramId = req.headers['x-telegram-id'] || req.query.telegramId;
   if (!telegramId) {
     return res.json({ authenticated: false });
@@ -166,10 +220,8 @@ app.get('/api/session', async (req, res) => {
       groupId: user.groupId
     });
 
-    // Check token or fetch fresh user info
     const userInfo = await client.getUserInfo();
 
-    // Update saved user info
     db.saveUser(telegramId, {
       accessToken: client.accessToken,
       tokenExpiresAt: client.tokenExpiresAt,
@@ -341,7 +393,7 @@ app.post('/api/logout', (req, res) => {
   if (telegramId) {
     db.deleteUser(telegramId);
   }
-  res.json({ success: true });
+  res.json({ success: true, singleUserMode: isSingleUser });
 });
 
 // Fallback all frontend routes to index.html for SPA
@@ -351,20 +403,34 @@ app.use((req, res) => {
 
 // ==================== INITIALIZE SERVICES ====================
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`===============================================`);
   console.log(`🚀 MyStat Telegram Assistant is running!`);
   console.log(`📡 Local URL:       http://localhost:${PORT}`);
   console.log(`🌐 Public App URL:  ${APP_URL}`);
-  console.log(`⚡ Render Free Tier anti-sleep pinger enabled`);
+  if (isSingleUser) {
+    console.log(`👤 Mode:            Single-User Mode (Auto-Auth)`);
+    console.log(`🔑 Username:        ${process.env.MYSTAT_USERNAME}`);
+    console.log(`🆔 Telegram ID:     ${process.env.MY_TELEGRAM_ID || 'Not set'}`);
+  }
   console.log(`===============================================`);
 
-  // Start the anti-sleep self-pinger
-  startPinger({ port: PORT, intervalMinutes: 9 });
+  // Auto-authenticate in Single-User Mode
+  if (isSingleUser) {
+    try {
+      await ensureSingleUserAuth();
+    } catch (err) {
+      console.warn(`[Single-User Mode] ⚠️ Initial authentication will retry on demand: ${err.message}`);
+    }
+  }
+
+  // Start the anti-sleep self-pinger (with ENABLE_SELF_PINGER toggle)
+  const pingInterval = parseInt(process.env.PING_INTERVAL_MINUTES || '9');
+  startPinger({ port: PORT, intervalMinutes: pingInterval });
 
   // Initialize Telegram Bot if BOT_TOKEN is provided
   if (BOT_TOKEN) {
-    const bot = createBot(BOT_TOKEN, APP_URL);
+    const bot = createBot(BOT_TOKEN, APP_URL, singleUserClient);
     if (bot) {
       console.log('[Telegram Bot] Starting bot via Long Polling...');
       bot.start({
@@ -376,6 +442,6 @@ app.listen(PORT, '0.0.0.0', () => {
       });
     }
   } else {
-    console.log('[Telegram Bot] ℹ️ BOT_TOKEN not found in environment. Create a bot with @BotFather and set BOT_TOKEN in .env to enable Telegram bot.');
+    console.log('[Telegram Bot] ℹ️ BOT_TOKEN not found in environment.');
   }
 });
