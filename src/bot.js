@@ -8,6 +8,21 @@ const { Bot, InlineKeyboard, Keyboard } = require('grammy');
 const { MyStatClient, HomeworkStatus } = require('./mystat');
 const db = require('./db');
 
+function attachWebAppButton(keyboard, text, url) {
+  if (url && typeof url === 'string') {
+    // Valid HTTPS URL (Render.com or custom domain)
+    if (url.startsWith('https://')) {
+      return keyboard.webApp(text, url);
+    }
+    // Public HTTP URL (not localhost or 127.0.0.1)
+    if (url.startsWith('http://') && !url.includes('localhost') && !url.includes('127.0.0.1')) {
+      return keyboard.url(text, url);
+    }
+  }
+  // Skip adding button if localhost (Telegram Bot API rejects localhost inline buttons with 400 Bad Request)
+  return keyboard;
+}
+
 function createBot(token, webAppUrl, defaultClient = null) {
   if (!token) {
     console.warn('[Telegram Bot] ⚠️ BOT_TOKEN is not provided. Telegram bot will not start. (Mini App web service will still work)');
@@ -15,6 +30,11 @@ function createBot(token, webAppUrl, defaultClient = null) {
   }
 
   const bot = new Bot(token);
+
+  // Global error handler so bot never crashes on Telegram API errors
+  bot.catch((err) => {
+    console.error('[Telegram Bot Error Handler] ⚠️', err.message || err);
+  });
 
   // Security Guard: restrict bot access only to MY_TELEGRAM_ID if configured
   const myTelegramId = process.env.MY_TELEGRAM_ID ? String(process.env.MY_TELEGRAM_ID).trim() : null;
@@ -53,12 +73,15 @@ function createBot(token, webAppUrl, defaultClient = null) {
     const user = db.getUser(userId);
 
     if (!user || (!user.accessToken && !user.password)) {
+      const kb = new InlineKeyboard();
+      attachWebAppButton(kb, '🔐 Войти в MyStat', webAppUrl);
+      const opts = {};
+      if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
       await ctx.reply(
         '👋 Вы ещё не авторизованы в MyStat!\n\n' +
-        'Пожалуйста, откройте Mini App по кнопке ниже и выполните вход под вашим логином и паролем от mystat.itstep.org.',
-        {
-          reply_markup: new InlineKeyboard().webApp('🔐 Войти в MyStat', webAppUrl)
-        }
+        'Пожалуйста, откройте Mini App и выполните вход под вашим логином и паролем от mystat.itstep.org.',
+        opts
       );
       return null;
     }
@@ -77,8 +100,12 @@ function createBot(token, webAppUrl, defaultClient = null) {
   // /start command
   bot.command('start', async (ctx) => {
     const name = ctx.from.first_name || 'Студент';
-    const inlineKeyboard = new InlineKeyboard()
-      .webApp('🚀 Открыть MyStat Помощник', webAppUrl);
+    const inlineKeyboard = new InlineKeyboard();
+    attachWebAppButton(inlineKeyboard, '🚀 Открыть MyStat Помощник', webAppUrl);
+
+    const hasButton = inlineKeyboard.inline_keyboard.length > 0;
+    const sendOptions = { parse_mode: 'HTML' };
+    if (hasButton) sendOptions.reply_markup = inlineKeyboard;
 
     await ctx.reply(
       `👋 Привет, <b>${name}</b>!\n\n` +
@@ -88,11 +115,10 @@ function createBot(token, webAppUrl, defaultClient = null) {
       `• 📅 Показывать расписание пар на все дни с аудиториями и преподавателями\n` +
       `• ⭐ Смотреть оценки за сегодня и недавние посещения\n` +
       `• 🏆 Отображать таблицу лидеров группы и потока\n\n` +
-      `👇 Нажми на кнопку ниже, чтобы запустить интерактивный <b>Mini App</b>, или используй команды в меню!`,
-      {
-        parse_mode: 'HTML',
-        reply_markup: inlineKeyboard
-      }
+      (hasButton 
+        ? `👇 Нажми на кнопку ниже, чтобы запустить интерактивный <b>Mini App</b>, или используй команды в меню!`
+        : `👇 Используй кнопки в нижнем меню для быстрого просмотра:`),
+      sendOptions
     );
 
     // Send the reply keyboard as well
@@ -103,6 +129,11 @@ function createBot(token, webAppUrl, defaultClient = null) {
 
   // /help command
   bot.command('help', async (ctx) => {
+    const kb = new InlineKeyboard();
+    attachWebAppButton(kb, '🚀 Запустить Mini App', webAppUrl);
+    const opts = { parse_mode: 'HTML' };
+    if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
     await ctx.reply(
       '📖 <b>Список команд бота:</b>\n\n' +
       '• <code>/start</code> — Главное меню и запуск Mini App\n' +
@@ -112,10 +143,7 @@ function createBot(token, webAppUrl, defaultClient = null) {
       '• <code>/leaders</code> — Таблица лидеров группы\n' +
       '• <code>/logout</code> — Сбросить сессию MyStat\n\n' +
       '💡 В <b>Mini App</b> доступен полный календарь на месяц, фильтры и удобный интерфейс!',
-      {
-        parse_mode: 'HTML',
-        reply_markup: new InlineKeyboard().webApp('🚀 Запустить Mini App', webAppUrl)
-      }
+      opts
     );
   });
 
@@ -129,16 +157,16 @@ function createBot(token, webAppUrl, defaultClient = null) {
     try {
       const { active, overdue, totalCount } = await session.client.getPendingHomework();
 
+      const kb = new InlineKeyboard();
+
       if (totalCount === 0) {
-        return await ctx.reply('🎉 <b>Отличная работа!</b>\nУ тебя нет висящих домашних заданий.', {
-          parse_mode: 'HTML',
-          reply_markup: new InlineKeyboard().webApp('📱 Открыть все ДЗ в Mini App', webAppUrl)
-        });
+        attachWebAppButton(kb, '📱 Открыть все ДЗ в Mini App', webAppUrl);
+        const opts = { parse_mode: 'HTML' };
+        if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+        return await ctx.reply('🎉 <b>Отличная работа!</b>\nУ тебя нет висящих домашних заданий.', opts);
       }
 
       let msg = `📚 <b>Висящие домашние задания (${totalCount}):</b>\n\n`;
-
-      const keyboard = new InlineKeyboard();
 
       // Show overdue if any
       if (overdue.length > 0) {
@@ -150,7 +178,9 @@ function createBot(token, webAppUrl, defaultClient = null) {
           if (hw.teacher) msg += `👨‍🏫 Преподаватель: ${escapeHtml(hw.teacher)}\n`;
           if (hw.downloadUrl) {
             msg += `📥 <a href="${hw.downloadUrl}">Скачать файл задания</a>\n`;
-            keyboard.url(`📥 ДЗ: ${hw.theme.slice(0, 20)}...`, hw.downloadUrl).row();
+            if (hw.downloadUrl.startsWith('http')) {
+              kb.url(`📥 ДЗ: ${hw.theme.slice(0, 20)}...`, hw.downloadUrl).row();
+            }
           }
           msg += '\n';
         });
@@ -166,19 +196,23 @@ function createBot(token, webAppUrl, defaultClient = null) {
           if (hw.teacher) msg += `👨‍🏫 Преподаватель: ${escapeHtml(hw.teacher)}\n`;
           if (hw.downloadUrl) {
             msg += `📥 <a href="${hw.downloadUrl}">Скачать файл задания</a>\n`;
-            keyboard.url(`📥 Скачать: ${hw.theme.slice(0, 20)}...`, hw.downloadUrl).row();
+            if (hw.downloadUrl.startsWith('http')) {
+              kb.url(`📥 Скачать: ${hw.theme.slice(0, 20)}...`, hw.downloadUrl).row();
+            }
           }
           msg += '\n';
         });
       }
 
-      keyboard.webApp('📱 Открыть полный список в Mini App', webAppUrl);
+      attachWebAppButton(kb, '📱 Открыть полный список в Mini App', webAppUrl);
 
-      await ctx.reply(msg, {
+      const opts = {
         parse_mode: 'HTML',
-        disable_web_page_preview: true,
-        reply_markup: keyboard
-      });
+        disable_web_page_preview: true
+      };
+      if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
+      await ctx.reply(msg, opts);
 
     } catch (err) {
       console.error('Bot HW Error:', err);
@@ -236,13 +270,13 @@ function createBot(token, webAppUrl, defaultClient = null) {
         });
       }
 
-      const keyboard = new InlineKeyboard()
-        .webApp('📅 Календарь на весь месяц в Mini App', webAppUrl);
+      const kb = new InlineKeyboard();
+      attachWebAppButton(kb, '📅 Календарь на весь месяц в Mini App', webAppUrl);
 
-      await ctx.reply(msg, {
-        parse_mode: 'HTML',
-        reply_markup: keyboard
-      });
+      const opts = { parse_mode: 'HTML' };
+      if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
+      await ctx.reply(msg, opts);
 
     } catch (err) {
       console.error('Bot Schedule Error:', err);
@@ -297,13 +331,13 @@ function createBot(token, webAppUrl, defaultClient = null) {
         });
       }
 
-      const keyboard = new InlineKeyboard()
-        .webApp('📊 Подробнее в Mini App', webAppUrl);
+      const kb = new InlineKeyboard();
+      attachWebAppButton(kb, '📊 Подробнее в Mini App', webAppUrl);
 
-      await ctx.reply(msg, {
-        parse_mode: 'HTML',
-        reply_markup: keyboard
-      });
+      const opts = { parse_mode: 'HTML' };
+      if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
+      await ctx.reply(msg, opts);
 
     } catch (err) {
       console.error('Bot Grades Error:', err);
@@ -335,13 +369,13 @@ function createBot(token, webAppUrl, defaultClient = null) {
         });
       }
 
-      const keyboard = new InlineKeyboard()
-        .webApp('🏆 Лидеры потока и группы в Mini App', webAppUrl);
+      const kb = new InlineKeyboard();
+      attachWebAppButton(kb, '🏆 Лидеры потока и группы в Mini App', webAppUrl);
 
-      await ctx.reply(msg, {
-        parse_mode: 'HTML',
-        reply_markup: keyboard
-      });
+      const opts = { parse_mode: 'HTML' };
+      if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
+      await ctx.reply(msg, opts);
 
     } catch (err) {
       console.error('Bot Leaders Error:', err);
@@ -354,21 +388,28 @@ function createBot(token, webAppUrl, defaultClient = null) {
 
   // Open Mini App button text
   bot.hears('🚀 Открыть Mini App', async (ctx) => {
-    await ctx.reply('Нажми кнопку ниже для открытия приложения:', {
-      reply_markup: new InlineKeyboard().webApp('🚀 Запустить MyStat Mini App', webAppUrl)
-    });
+    const kb = new InlineKeyboard();
+    attachWebAppButton(kb, '🚀 Запустить MyStat Mini App', webAppUrl);
+
+    const opts = {};
+    if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
+    await ctx.reply('Нажми кнопку ниже для открытия приложения:', opts);
   });
 
   bot.hears('ℹ️ Помощь', async (ctx) => {
+    const kb = new InlineKeyboard();
+    attachWebAppButton(kb, '🚀 Запустить Mini App', webAppUrl);
+
+    const opts = { parse_mode: 'HTML' };
+    if (kb.inline_keyboard.length > 0) opts.reply_markup = kb;
+
     await ctx.reply(
       '💡 <b>Как пользоваться:</b>\n\n' +
       '1. Нажми <b>🚀 Открыть Mini App</b>\n' +
       '2. Твой аккаунт синхронизируется автоматически без необходимости вводить логин и пароль!\n' +
       '3. Пользуйся удобным интерфейсом для просмотра домашки, скачивания файлов, расписания и оценок!',
-      {
-        parse_mode: 'HTML',
-        reply_markup: new InlineKeyboard().webApp('🚀 Запустить Mini App', webAppUrl)
-      }
+      opts
     );
   });
 

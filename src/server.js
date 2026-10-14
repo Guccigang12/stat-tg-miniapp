@@ -49,7 +49,11 @@ async function ensureSingleUserAuth() {
 }
 
 // Base public URL for Render.com or local
-const APP_URL = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || `http://localhost:${PORT}`;
+let rawUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || '';
+if (rawUrl && rawUrl.startsWith('http://') && !rawUrl.includes('localhost')) {
+  rawUrl = rawUrl.replace(/^http:\/\//, 'https://');
+}
+const APP_URL = rawUrl || `http://localhost:${PORT}`;
 
 // Middlewares
 app.use(cors());
