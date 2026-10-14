@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>MyStat Helper — Помощник Студента IT Step</title>
+  
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app" class="app-container">
+    
+    <!-- Top Bar -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo-badge">
+          <span class="logo-icon">⚡</span>
+          <span class="logo-text">MyStat <span class="highlight">Helper</span></span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <!-- Gamification points badge -->
+        <div id="userPointsBadge" class="points-badge hidden">
+          <span class="point-item" title="Алмазы"><span class="gem-icon">💎</span> <span id="userGems">0</span></span>
+          <span class="point-item" title="Монеты"><span class="coin-icon">🪙</span> <span id="userCoins">0</span></span>
+        </div>
+
+        <!-- Refresh button -->
+        <button id="btnRefresh" class="icon-btn" title="Обновить данные" aria-label="Обновить">
+          <i data-lucide="rotate-cw"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Student Info Pill (Shown when logged in) -->
+    <div id="studentPill" class="student-pill hidden">
+      <div class="student-avatar" id="studentAvatar">
+        <span id="studentAvatarText">?</span>
+      </div>
+      <div class="student-details">
+        <div class="student-name" id="studentName">Студент</div>
+        <div class="student-group" id="studentGroup">Группа не определена</div>
+      </div>
+      <div class="status-indicator" title="Подключено к MyStat">
+        <span class="pulse-dot"></span>
+        <span class="status-label">Online</span>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="content-area">
+
+      <!-- ==================== TAB 1: HOMEWORK ==================== -->
+      <section id="tabHomework" class="tab-page active">
+        <div class="page-header">
+          <div class="page-title-group">
+            <h1 class="page-title">Домашние задания</h1>
+            <p class="page-subtitle">Висящая домашка и скачивание заданий</p>
+          </div>
+          <span id="hwCountBadge" class="badge-counter">0</span>
+        </div>
+
+        <!-- Filter Pills -->
+        <div class="filter-pills">
+          <button class="filter-pill active" data-hw-filter="pending">
+            <i data-lucide="flame" class="pill-icon"></i> Висящие
+          </button>
+          <button class="filter-pill" data-hw-filter="active">
+            <i data-lucide="clock" class="pill-icon"></i> Активные
+          </button>
+          <button class="filter-pill" data-hw-filter="overdue">
+            <i data-lucide="alert-triangle" class="pill-icon"></i> Просроченные
+          </button>
+          <button class="filter-pill" data-hw-filter="checked">
+            <i data-lucide="check-circle" class="pill-icon"></i> Проверенные
+          </button>
+          <button class="filter-pill" data-hw-filter="all">
+            <i data-lucide="layers" class="pill-icon"></i> Все
+          </button>
+        </div>
+
+        <!-- Homework List Container -->
+        <div id="hwListContainer" class="cards-list">
+          <!-- Dynamic cards injected via JS -->
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <p>Загрузка домашних заданий...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 2: SCHEDULE ==================== -->
+      <section id="tabSchedule" class="tab-page">
+        <div class="page-header">
+          <div class="page-title-group">
+            <h1 class="page-title">Расписание</h1>
+            <p class="page-subtitle">Пары на все дни с аудиториями</p>
+          </div>
+        </div>
+
+        <!-- Month and Date Selector -->
+        <div class="schedule-controls">
+          <div class="month-selector">
+            <button id="btnPrevMonth" class="icon-btn-small" aria-label="Предыдущий месяц">
+              <i data-lucide="chevron-left"></i>
+            </button>
+            <span id="currentMonthLabel" class="month-label">Октябрь 2026</span>
+            <button id="btnNextMonth" class="icon-btn-small" aria-label="Следующий месяц">
+              <i data-lucide="chevron-right"></i>
+            </button>
+          </div>
+
+          <div class="quick-date-buttons">
+            <button id="btnScheduleToday" class="quick-btn active">Сегодня</button>
+            <button id="btnScheduleTomorrow" class="quick-btn">Завтра</button>
+            <button id="btnScheduleAll" class="quick-btn">Весь месяц</button>
+          </div>
+        </div>
+
+        <!-- Horizontal Days Strip (for active month) -->
+        <div id="daysScrollStrip" class="days-scroll-strip">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- Schedule List Container -->
+        <div id="scheduleListContainer" class="cards-list">
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <p>Загрузка расписания...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 3: GRADES ==================== -->
+      <section id="tabGrades" class="tab-page">
+        <div class="page-header">
+          <div class="page-title-group">
+            <h1 class="page-title">Оценки</h1>
+            <p class="page-subtitle">Оценки за сегодня и последние баллы</p>
+          </div>
+        </div>
+
+        <!-- Today's Grades Highlight Box -->
+        <div class="today-grades-card">
+          <div class="today-header">
+            <div class="today-tag"><i data-lucide="sparkles"></i> СЕГОДНЯ</div>
+            <span id="todayDateLabel" class="date-tag">15.10.2026</span>
+          </div>
+          <div id="todayGradesList" class="today-grades-content">
+            <!-- Populated via JS -->
+            <div class="loading-state-inline">
+              <div class="spinner-small"></div>
+              <span>Проверка оценок за сегодня...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Grades Section -->
+        <div class="section-title-wrap">
+          <h2 class="section-title"><i data-lucide="history"></i> Недавние занятия и оценки</h2>
+        </div>
+
+        <div id="recentVisitsContainer" class="cards-list">
+          <!-- Populated via JS -->
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <p>Загрузка истории оценок...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 4: LEADERBOARD ==================== -->
+      <section id="tabLeaders" class="tab-page">
+        <div class="page-header">
+          <div class="page-title-group">
+            <h1 class="page-title">Таблица лидеров</h1>
+            <p class="page-subtitle">Рейтинг успеваемости студентов</p>
+          </div>
+        </div>
+
+        <!-- Leaderboard Type Switcher -->
+        <div class="tab-segmented-control">
+          <button class="seg-btn active" data-leader-type="group">
+            <i data-lucide="users"></i> Моя группа
+          </button>
+          <button class="seg-btn" data-leader-type="stream">
+            <i data-lucide="globe"></i> Весь поток
+          </button>
+        </div>
+
+        <!-- Podium for Top 3 -->
+        <div id="leadersPodium" class="podium-container">
+          <!-- Injected via JS -->
+        </div>
+
+        <!-- Full Leaderboard List -->
+        <div id="leadersListContainer" class="leaders-list">
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <p>Загрузка рейтинга...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TAB 5: PROFILE & SETTINGS ==================== -->
+      <section id="tabProfile" class="tab-page">
+        <div class="page-header">
+          <div class="page-title-group">
+            <h1 class="page-title">Профиль</h1>
+            <p class="page-subtitle">Аккаунт MyStat и статус сервиса</p>
+          </div>
+        </div>
+
+        <!-- Profile Details Card -->
+        <div class="profile-card">
+          <div class="profile-hero">
+            <div class="profile-avatar-large" id="profileAvatarLarge">
+              <span id="profileAvatarInitial">👤</span>
+            </div>
+            <h2 class="profile-name" id="profileFullName">Студент</h2>
+            <p class="profile-sub" id="profileGroupName">Группа</p>
+          </div>
+
+          <div class="profile-stats-grid">
+            <div class="stat-box">
+              <span class="stat-icon">💎</span>
+              <span class="stat-value" id="profileGems">0</span>
+              <span class="stat-label">Алмазов</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-icon">🪙</span>
+              <span class="stat-value" id="profileCoins">0</span>
+              <span class="stat-label">Монет</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-icon">⭐</span>
+              <span class="stat-value" id="profileLevel">1</span>
+              <span class="stat-label">Уровень</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Server & Anti-Sleep Pinger Status -->
+        <div class="system-status-card">
+          <div class="sys-header">
+            <i data-lucide="server" class="sys-icon"></i>
+            <div>
+              <div class="sys-title">Статус сервиса (Render.com)</div>
+              <div class="sys-desc">Anti-Sleep Pinger активен</div>
+            </div>
+            <span class="status-chip active">Online</span>
+          </div>
+          <div class="sys-details">
+            <div class="sys-row">
+              <span>Авто-пинг Render:</span>
+              <span class="code-val">Каждые 9 мин</span>
+            </div>
+            <div class="sys-row">
+              <span>Время работы (Uptime):</span>
+              <span id="sysUptime" class="code-val">~ мин</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Logout Action -->
+        <div class="profile-actions">
+          <button id="btnLogout" class="btn-logout">
+            <i data-lucide="log-out"></i> Выйти из аккаунта
+          </button>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Navigation Bar -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" data-tab="tabHomework">
+        <i data-lucide="book-open"></i>
+        <span>Домашка</span>
+        <span id="navHwDot" class="nav-dot hidden"></span>
+      </button>
+
+      <button class="nav-item" data-tab="tabSchedule">
+        <i data-lucide="calendar"></i>
+        <span>Расписание</span>
+      </button>
+
+      <button class="nav-item" data-tab="tabGrades">
+        <i data-lucide="star"></i>
+        <span>Оценки</span>
+      </button>
+
+      <button class="nav-item" data-tab="tabLeaders">
+        <i data-lucide="trophy"></i>
+        <span>Лидеры</span>
+      </button>
+
+      <button class="nav-item" data-tab="tabProfile">
+        <i data-lucide="user"></i>
+        <span>Профиль</span>
+      </button>
+    </nav>
+
+    <!-- ==================== AUTH MODAL / SCREEN ==================== -->
+    <div id="authModal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-brand">
+          <div class="brand-badge">⚡ MyStat Helper</div>
+          <h2 class="modal-title">Вход в MyStat</h2>
+          <p class="modal-desc">Введите свои логин и пароль от mystat.itstep.org для синхронизации домашних заданий и расписания</p>
+        </div>
+
+        <form id="loginForm" class="auth-form">
+          <div class="form-group">
+            <label for="usernameInput">Логин или Email</label>
+            <div class="input-wrap">
+              <i data-lucide="user" class="input-icon"></i>
+              <input type="text" id="usernameInput" placeholder="Ваш логин в MyStat" required autocomplete="username">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="passwordInput">Пароль</label>
+            <div class="input-wrap">
+              <i data-lucide="lock" class="input-icon"></i>
+              <input type="password" id="passwordInput" placeholder="••••••••" required autocomplete="current-password">
+              <button type="button" id="btnTogglePassword" class="icon-toggle" aria-label="Показать пароль">
+                <i data-lucide="eye"></i>
+              </button>
+            </div>
+          </div>
+
+          <div id="authErrorMsg" class="error-banner hidden"></div>
+
+          <button type="submit" id="btnLoginSubmit" class="btn-primary">
+            <span class="btn-text">Войти в MyStat</span>
+            <div class="btn-spinner hidden"></div>
+          </button>
+
+          <p class="auth-privacy-note">
+            <i data-lucide="shield-check" class="shield-icon"></i>
+            Ваши данные безопасно передаются напрямую в API MyStat Академии ШАГ.
+          </p>
+        </form>
+      </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast" class="toast hidden"></div>
+
+  </div>
+
+  <!-- Main JavaScript App -->
+  <script src="js/app.js"></script>
+</body>
+</html>
