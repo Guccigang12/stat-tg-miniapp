@@ -1,10 +1,10 @@
 /**
  * MyStat API Client for mystat.itstep.org
- * Handles authentication, profile, homework, schedule, visits, and leaderboards.
+ * Handles modern IT Step MyStat API (mapi.itstep.org/v1/mystat)
+ * Supports authentication, user profile, homework, schedules, grades, and leaderboards.
  */
 
-const BASE_URL = 'https://msapi.itstep.org/api/v2';
-const APP_KEY = '6a56a5df2667e65aab73ce76d1dd737f7d1faef9c52e8b8c55ac75f565d8e8a6';
+const BASE_URL = 'https://mapi.itstep.org/v1/mystat';
 
 // Homework Status Enum
 const HomeworkStatus = {
@@ -16,13 +16,25 @@ const HomeworkStatus = {
 };
 
 class MyStatClient {
-  constructor({ username, password, accessToken = null, tokenExpiresAt = null, groupId = null } = {}) {
+  constructor({ username, password, accessToken = null, tokenExpiresAt = null, groupId = null, branch = null, userId = null } = {}) {
     this.username = username;
     this.password = password;
     this.accessToken = accessToken;
     this.tokenExpiresAt = tokenExpiresAt;
     this.groupId = groupId;
+    this.branch = branch;
+    this.userId = userId;
     this.userInfo = null;
+
+    if (accessToken && (!this.branch || !this.userId)) {
+      try {
+        const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64').toString('utf-8'));
+        this.branch = this.branch || payload.branch_alias || 'dp';
+        this.userId = this.userId || payload.id || payload.sub;
+      } catch (e) {
+        // Ignored if token format is non-standard
+      }
+    }
   }
 
   /**
@@ -55,57 +67,53 @@ class MyStatClient {
     this.username = username;
     this.password = password;
 
-    const payload = {
-      application_key: APP_KEY,
-      id_city: null,
-      username: this.username,
-      password: this.password
-    };
-
     const res = await fetch(`${BASE_URL}/auth/login`, {
       method: 'POST',
       headers: {
-        'Accept': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        login: this.username,
+        password: this.password
+      })
     });
 
-    let data;
-    try {
-      data = await res.json();
-    } catch (e) {
-      if (!res.ok) {
-        throw new Error(`Сервер MyStat временно недоступен (HTTP ${res.status}). Попробуйте позже.`);
+    const bodyText = await res.text();
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error('Неверный логин или пароль в MyStat.');
       }
-      throw new Error('Некорректный формат ответа от сервера MyStat.');
+      throw new Error(`Ошибка сервера MyStat (HTTP ${res.status}): ${bodyText}`);
     }
 
-    if (!res.ok || Array.isArray(data) || !data.access_token) {
-      const errorMsg = Array.isArray(data) && data[0]?.message 
-        ? data[0].message 
-        : data?.message || (res.status === 401 ? 'Неверный логин или пароль в MyStat.' : `Ошибка сервера MyStat (HTTP ${res.status})`);
-      throw new Error(errorMsg);
+    // Token is returned as plain text or quoted string
+    this.accessToken = bodyText.trim().replace(/^"|"$/g, '');
+
+    let tokenPayload = {};
+    try {
+      tokenPayload = JSON.parse(Buffer.from(this.accessToken.split('.')[1], 'base64').toString('utf-8'));
+    } catch (e) {
+      throw new Error('Не удалось расшифровать JWT токен от сервера MyStat.');
     }
 
-    this.accessToken = data.access_token;
-    // expires_in_access is in seconds or timestamp
-    this.tokenExpiresAt = data.expires_in_access 
-      ? Date.now() + (data.expires_in_access * 1000) 
-      : Date.now() + (24 * 60 * 60 * 1000);
+    this.branch = tokenPayload.branch_alias || 'dp';
+    this.userId = tokenPayload.id || tokenPayload.sub;
+    this.tokenExpiresAt = tokenPayload.exp ? tokenPayload.exp * 1000 : Date.now() + 24 * 3600 * 1000;
 
-    // Fetch user info to store group ID and full name
+    // Fetch user profile info
     await this.getUserInfo();
 
     return {
       accessToken: this.accessToken,
       tokenExpiresAt: this.tokenExpiresAt,
-      userInfo: this.userInfo
+      userInfo: this.userInfo,
+      branch: this.branch
     };
   }
 
   /**
-   * Make authorized GET/POST request with auto-refresh if token expired
+   * Make authorized request with auto-refresh if token expired
    */
   async request(path, options = {}) {
     if (this.isTokenExpired()) {
@@ -117,23 +125,34 @@ class MyStatClient {
     }
 
     const headers = {
-      'Accept': 'application/json',
+      'Accept': 'application/json, text/plain, */*',
       'Authorization': `Bearer ${this.accessToken}`,
-      'x-language': 'ru',
+      'X-UserId': String(this.userId || ''),
+      'branch_alias': this.branch || 'dp',
+      'X-Language': 'uk',
       ...(options.headers || {})
     };
 
-    const url = path.startsWith('http') ? path : `${BASE_URL}/${path}`;
-    const res = await fetch(url, {
-      ...options,
-      headers
-    });
+    let url;
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      url = path;
+    } else {
+      const cleanPath = path.replace(/^\/+/, '');
+      const fullPath = cleanPath.startsWith('auth/') || cleanPath.startsWith(`${this.branch}/`)
+        ? cleanPath
+        : `${this.branch || 'dp'}/${cleanPath}`;
+      url = `${BASE_URL}/${fullPath}`;
+    }
+
+    const res = await fetch(url, { ...options, headers });
 
     if (res.status === 401) {
       // Retry once after re-authenticating
       if (this.username && this.password) {
         await this.login(this.username, this.password);
         headers['Authorization'] = `Bearer ${this.accessToken}`;
+        headers['X-UserId'] = String(this.userId || '');
+        headers['branch_alias'] = this.branch || 'dp';
         const retryRes = await fetch(url, { ...options, headers });
         if (!retryRes.ok) throw new Error(`Ошибка MyStat API: ${retryRes.statusText}`);
         return await retryRes.json();
@@ -142,13 +161,11 @@ class MyStatClient {
     }
 
     if (!res.ok) {
-      let errMsg = `Ошибка запроса к MyStat API: ${res.status}`;
+      let errMsg = `Ошибка сервера MyStat (HTTP ${res.status})`;
       try {
         const errData = await res.json();
         if (errData?.message) errMsg = errData.message;
-      } catch (e) {
-        errMsg = `Сервер MyStat временно недоступен (HTTP ${res.status})`;
-      }
+      } catch (e) {}
       throw new Error(errMsg);
     }
 
@@ -163,23 +180,49 @@ class MyStatClient {
    * Get student user profile info
    */
   async getUserInfo() {
-    const data = await this.request('settings/user-info');
-    this.userInfo = data;
-    if (data && data.current_group_id) {
-      this.groupId = data.current_group_id;
-    }
-    return data;
-  }
+    const account = await this.request('auth/me', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
 
-  /**
-   * Ensure student group ID is available
-   */
-  async ensureGroupId() {
-    if (!this.groupId) {
-      const info = await this.getUserInfo();
-      this.groupId = info?.current_group_id;
+    let balances = [];
+    try {
+      balances = await this.request('gaming/get-balances') || [];
+    } catch (e) {}
+
+    let personal = null;
+    try {
+      personal = await this.request('profile/get-personal-data');
+    } catch (e) {}
+
+    const profile = account?.user_profiles?.[account.project_id || 50]?.[account.branch_id || 100]?.[0] || {};
+    const groupIdProp = profile?.properties?.find(p => p.key === 'id_tgroups')?.value;
+    if (groupIdProp) {
+      this.groupId = groupIdProp;
     }
-    return this.groupId;
+
+    const cristals = Array.isArray(balances) ? (balances.find(b => b.alias === 'cristals')?.value || 0) : 0;
+    const coins = Array.isArray(balances) ? (balances.find(b => b.alias === 'coins')?.value || 0) : 0;
+    const gaming_points = [
+      { new_gaming_point_types__id: 1, points: cristals },
+      { new_gaming_point_types__id: 2, points: coins }
+    ];
+
+    this.userInfo = {
+      id: account.id,
+      full_name: account.name || personal?.fio || account.username,
+      username: account.username,
+      photo: profile.photo || personal?.photo || null,
+      group_name: `Группа ${this.groupId || 'IT Step'}`,
+      current_group_id: this.groupId,
+      branch: account.branch_alias || this.branch,
+      gaming_points,
+      level: 1,
+      email: account.email
+    };
+
+    return this.userInfo;
   }
 
   /**
@@ -190,7 +233,6 @@ class MyStatClient {
     if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
       return filePath;
     }
-    // Often file_path in MyStat is a relative path like /upload/homework/...
     if (filePath.startsWith('/')) {
       return `https://mystat.itstep.org${filePath}`;
     }
@@ -203,16 +245,37 @@ class MyStatClient {
    * type: 0 (homework), 1 (lab)
    */
   async getHomeworkList({ status = HomeworkStatus.ACTIVE, type = 0, page = 1 } = {}) {
-    const groupId = await this.ensureGroupId();
-    let query = `page=${page}&type=${type}&group_id=${groupId}`;
+    let query = `page=${page}&per_page=30`;
     if (status !== null && status !== undefined) {
       query += `&status=${status}`;
     }
+    if (type !== null && type !== undefined) {
+      query += `&type=${type}`;
+    }
 
-    const res = await this.request(`homework/operations/list?${query}`);
-    
-    // Normalize data and enrich with full download URLs
-    const items = (res.data || []).map(hw => {
+    const res = await this.request(`homework/list?${query}`);
+
+    let rawItems = [];
+    let pagination = { currentPage: page, totalPages: 1 };
+
+    if (Array.isArray(res)) {
+      for (const group of res) {
+        if (Array.isArray(group.data)) {
+          rawItems.push(...group.data);
+        }
+      }
+    } else if (res && Array.isArray(res.data)) {
+      rawItems = res.data;
+      if (res._meta) {
+        pagination = {
+          currentPage: res._meta.currentPage || page,
+          totalPages: res._meta.pageCount || 1,
+          totalCount: res._meta.totalCount
+        };
+      }
+    }
+
+    const items = rawItems.map(hw => {
       const downloadUrl = MyStatClient.formatDownloadUrl(hw.file_path);
       return {
         id: hw.id,
@@ -224,7 +287,7 @@ class MyStatClient {
         overdueTime: hw.overdue_time || '',
         filePath: hw.file_path || null,
         downloadUrl: downloadUrl,
-        filename: hw.filename || (downloadUrl ? downloadUrl.split('/').pop() : null),
+        filename: hw.file_path ? hw.file_path.split('/').pop() : null,
         teacher: hw.fio_teach || '',
         status: hw.status,
         statusName: hw.status === HomeworkStatus.ACTIVE ? 'Активно' :
@@ -244,7 +307,7 @@ class MyStatClient {
 
     return {
       items,
-      pagination: res._meta || { currentPage: page, totalPages: 1 }
+      pagination
     };
   }
 
@@ -252,11 +315,9 @@ class MyStatClient {
    * Get Active ("висящие") homework assignments
    */
   async getPendingHomework() {
-    // Get active homeworks
     const active = await this.getHomeworkList({ status: HomeworkStatus.ACTIVE });
-    // Also fetch overdue homeworks because they are also "hanging" until submitted
     const overdue = await this.getHomeworkList({ status: HomeworkStatus.OVERDUE });
-    
+
     return {
       active: active.items,
       overdue: overdue.items,
@@ -275,9 +336,9 @@ class MyStatClient {
    * Get monthly schedule (all days of month)
    */
   async getMonthSchedule(date = new Date()) {
-    const dateStr = MyStatClient.formatDate(date);
-    const data = await this.request(`schedule/operations/get-month?date_filter=${dateStr}`);
-    return Array.isArray(data) ? data : [];
+    const dateStr = typeof date === 'string' ? date : MyStatClient.formatDate(date);
+    const data = await this.request(`schedule/get-month?date_filter=${dateStr}`);
+    return Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
   }
 
   /**
@@ -285,8 +346,8 @@ class MyStatClient {
    */
   async getScheduleByDate(date = new Date()) {
     const dateStr = typeof date === 'string' ? date : MyStatClient.formatDate(date);
-    const data = await this.request(`schedule/operations/get-by-date?date_filter=${dateStr}`);
-    return Array.isArray(data) ? data : [];
+    const monthSchedule = await this.getMonthSchedule(date);
+    return monthSchedule.filter(item => item.date === dateStr);
   }
 
   /**
@@ -297,76 +358,42 @@ class MyStatClient {
   }
 
   /**
-   * Get student visits and grades
-   */
-  async getVisits() {
-    const data = await this.request('progress/operations/student-visits');
-    return Array.isArray(data) ? data : [];
-  }
-
-  /**
-   * Get recent activity log (points, marks, diamonds, coins)
-   */
-  async getActivityLog() {
-    const data = await this.request('dashboard/progress/activity-web');
-    return data || [];
-  }
-
-  /**
-   * Get today's marks / grades
-   * Inspects visits and activity log for current date
+   * Get student marks and recent performance
    */
   async getTodayGrades() {
     const todayStr = MyStatClient.formatDate(new Date());
-    const visits = await this.getVisits();
-    
-    // Find visits for today
-    const todayVisits = visits.filter(v => {
-      if (!v.date_visit) return false;
-      return v.date_visit.startsWith(todayStr);
-    });
-
-    // Also get activity log to capture any marks awarded today
-    let activities = [];
+    let marks = [];
     try {
-      const logs = await this.getActivityLog();
-      // logs can be array of { date, activity_log: [...] }
-      if (Array.isArray(logs)) {
-        const todayLog = logs.find(l => l.date === todayStr);
-        if (todayLog && Array.isArray(todayLog.activity_log)) {
-          activities = todayLog.activity_log;
-        }
-      }
+      marks = await this.request('statistic/marks') || [];
     } catch (e) {
-      console.warn('Could not fetch activity log for today grades:', e.message);
+      console.warn('Could not fetch marks:', e.message);
     }
 
-    // Get recent visits if today has no marks yet so the user sees their latest marks
-    const recentVisits = visits.slice(0, 5).map(v => ({
-      date: v.date_visit,
-      subject: v.spec_name || 'Предмет',
-      theme: v.lesson_theme || '',
-      teacher: v.teacher_name || '',
-      classWorkMark: v.class_work_mark,
-      homeWorkMark: v.home_work_mark,
-      labWorkMark: v.lab_work_mark,
-      wasPresent: v.status_was === 1
-    }));
+    const todayMarks = Array.isArray(marks) ? marks.filter(m => m.mark_date === todayStr) : [];
+    const recentMarks = Array.isArray(marks) ? marks.slice(0, 6) : [];
 
     return {
       todayDate: todayStr,
-      todayLessonsCount: todayVisits.length,
-      todayGrades: todayVisits.map(v => ({
-        subject: v.spec_name,
-        theme: v.lesson_theme,
-        teacher: v.teacher_name,
-        classWorkMark: v.class_work_mark,
-        homeWorkMark: v.home_work_mark,
-        labWorkMark: v.lab_work_mark,
-        wasPresent: v.status_was === 1
+      todayLessonsCount: todayMarks.length,
+      todayGrades: todayMarks.map(m => ({
+        subject: m.name_spec || 'Предмет',
+        theme: m.nlenta ? `Урок ${m.nlenta}` : '',
+        teacher: m.fio_teach || '',
+        classWorkMark: m.mark,
+        homeWorkMark: null,
+        labWorkMark: null,
+        wasPresent: true
       })),
-      todayActivities: activities,
-      recentGrades: recentVisits
+      recentGrades: recentMarks.map(m => ({
+        date: m.mark_date,
+        subject: m.name_spec || 'Предмет',
+        theme: m.nlenta ? `Урок ${m.nlenta}` : '',
+        teacher: m.fio_teach || '',
+        classWorkMark: m.mark,
+        homeWorkMark: null,
+        labWorkMark: null,
+        wasPresent: true
+      }))
     };
   }
 
@@ -374,16 +401,28 @@ class MyStatClient {
    * Get Group Leaderboard
    */
   async getGroupLeaders() {
-    const data = await this.request('dashboard/progress/leader-group');
-    return Array.isArray(data) ? data : [];
+    const res = await this.request('progress/leader-table');
+    const top = res?.group?.month?.top || [];
+    return top.map(l => ({
+      full_name: l.fio_stud || l.full_name || 'Студент',
+      amount: l.amount || 0,
+      photo_path: l.photo || l.photo_path || null,
+      position: l.position
+    }));
   }
 
   /**
    * Get Stream (Поток) Leaderboard
    */
   async getStreamLeaders() {
-    const data = await this.request('dashboard/progress/leader-stream');
-    return Array.isArray(data) ? data : [];
+    const res = await this.request('progress/leader-table');
+    const top = res?.stream?.month?.top || [];
+    return top.map(l => ({
+      full_name: l.fio_stud || l.full_name || 'Студент',
+      amount: l.amount || 0,
+      photo_path: l.photo || l.photo_path || null,
+      position: l.position
+    }));
   }
 }
 

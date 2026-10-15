@@ -91,7 +91,9 @@ function createBot(token, webAppUrl, defaultClient = null) {
       password: user.password,
       accessToken: user.accessToken,
       tokenExpiresAt: user.tokenExpiresAt,
-      groupId: user.groupId
+      groupId: user.groupId,
+      branch: user.branch,
+      userId: user.userId
     });
 
     return { client, user };

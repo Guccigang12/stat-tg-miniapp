@@ -42,6 +42,8 @@ async function ensureSingleUserAuth() {
       accessToken: result.accessToken,
       tokenExpiresAt: result.tokenExpiresAt,
       groupId: singleUserClient.groupId,
+      branch: singleUserClient.branch,
+      userId: singleUserClient.userId,
       userInfo: result.userInfo
     });
   }
@@ -125,7 +127,9 @@ async function resolveClient(req, res, next) {
       password: savedUser?.password,
       accessToken: token,
       tokenExpiresAt: savedUser?.tokenExpiresAt,
-      groupId: savedUser?.groupId
+      groupId: savedUser?.groupId,
+      branch: savedUser?.branch,
+      userId: savedUser?.userId
     });
 
     req.mystat = client;
@@ -165,6 +169,8 @@ app.post('/api/login', async (req, res) => {
         accessToken: loginResult.accessToken,
         tokenExpiresAt: loginResult.tokenExpiresAt,
         groupId: loginResult.userInfo?.current_group_id,
+        branch: client.branch,
+        userId: client.userId,
         userInfo: loginResult.userInfo
       });
     }
@@ -221,7 +227,9 @@ app.get('/api/session', async (req, res) => {
       password: user.password,
       accessToken: user.accessToken,
       tokenExpiresAt: user.tokenExpiresAt,
-      groupId: user.groupId
+      groupId: user.groupId,
+      branch: user.branch,
+      userId: user.userId
     });
 
     const userInfo = await client.getUserInfo();
@@ -230,6 +238,8 @@ app.get('/api/session', async (req, res) => {
       accessToken: client.accessToken,
       tokenExpiresAt: client.tokenExpiresAt,
       groupId: client.groupId,
+      branch: client.branch,
+      userId: client.userId,
       userInfo
     });
 
